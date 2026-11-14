@@ -1,11 +1,18 @@
 mod cava;
 mod config;
-mod ctl;
 mod layout;
+mod gpu;
 mod render;
+mod reserve;
+mod theme;
+mod waves;
 mod zoo;
 
+use config::StyleCmd;
 use std::sync::{Arc, Mutex};
+use zoo_ipc::{Daemon, Front, Spec};
+
+pub const DAEMON: Daemon = Daemon::new("soundwav");
 
 const USAGE: &str = "soundwav: audio waves wrapped around the focused window (Zoolander)
 
@@ -21,7 +28,8 @@ usage: soundwav [--toml TOML] [--toggle | --quit | --style waves|bars|next | --f
 
 zoolander plugin: ~/.config/zoolander/plugins/soundwav";
 
-const ARGS: &[&str] = &["--toml", "--toggle", "--quit", "--style", "--fresh", "--demo"];
+const SPEC: Spec = Spec { commands: &[("--style", "style")], flags: &[DEMO] };
+const DEMO: &str = "--demo";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,37 +37,40 @@ fn main() {
         println!("{USAGE}");
         return;
     }
-    let cli = match ctl::parse(&args, ARGS) {
+    let cli = match DAEMON.parse(&args, &SPEC) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("soundwav: {e}\n\n{USAGE}");
             std::process::exit(2);
         }
     };
-    let dir = config::runtime_dir();
-    let wait = match ctl::front(&dir, "soundwav", &cli) {
-        ctl::Front::Done(code) => std::process::exit(code),
-        ctl::Front::Start(w) => w,
+    let wait = match DAEMON.front(&cli) {
+        Front::Done(code) => std::process::exit(code),
+        Front::Start(w) => w,
     };
-    let Some(_lock) = ctl::lock(&dir, wait) else {
+    let Some(_lock) = DAEMON.lock(wait) else {
         eprintln!("soundwav: already running");
         return;
     };
-    let cfg = config::load(cli.inline.as_deref());
+    let demo = cli.has(DEMO);
+    let cfg = config::load(cli.inline());
     let style_cfg = cfg.clone();
-    ctl::serve(&dir, "soundwav", cli.inline.clone(), move |cmd| {
+    DAEMON.serve(cli.inline(), move |cmd| {
         let arg = cmd.strip_prefix("style ")?;
-        Some(config::set_style(&style_cfg, arg).unwrap_or_else(|| format!("bad style {arg}")))
+        Some(match StyleCmd::parse(arg) {
+            Some(c) => config::set_style(&style_cfg, c).name().to_string(),
+            None => format!("bad style {arg}"),
+        })
     });
     let audio = Arc::new(Mutex::new(cava::Audio::default()));
     let scene = Arc::new(Mutex::new(None));
     let control = Arc::new(cava::Control::default());
-    if cli.demo {
+    if demo {
         cava::spawn_demo(cfg.clone(), audio.clone());
     } else {
         cava::spawn(cfg.clone(), audio.clone(), control.clone());
     }
-    zoo::spawn(cfg.clone(), scene.clone(), control, cli.demo);
+    zoo::spawn(cfg.clone(), scene.clone(), control, demo);
     if let Err(e) = render::run(cfg, audio, scene) {
         eprintln!("soundwav: {e}");
         std::process::exit(1);

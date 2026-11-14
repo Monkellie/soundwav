@@ -1,4 +1,5 @@
-use crate::config::{runtime_dir, Config};
+use crate::config::Config;
+use crate::DAEMON;
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -72,7 +73,7 @@ pub fn split_stereo(raw: &[f32]) -> (Vec<f32>, Vec<f32>) {
 }
 
 fn write_config(cfg: &Config) -> std::io::Result<PathBuf> {
-    let dir = runtime_dir();
+    let dir = DAEMON.runtime_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("cava.conf");
     let text = format!(

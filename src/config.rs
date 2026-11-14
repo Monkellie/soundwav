@@ -1,12 +1,91 @@
-use serde::Deserialize;
+use crate::DAEMON;
+use serde::{Deserialize, Deserializer};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::SystemTime;
-use std::sync::atomic::{AtomicU8, Ordering};
+use zoo_ipc::daemon::config_home;
+use zoo_ipc::ThemeSource;
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Style {
+    Bars,
+    Waves,
+}
+
+impl Style {
+    fn other(self) -> Self {
+        match self {
+            Style::Bars => Style::Waves,
+            Style::Waves => Style::Bars,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Style::Bars => "bars",
+            Style::Waves => "waves",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StyleCmd {
+    Set(Style),
+    Next,
+}
+
+impl StyleCmd {
+    pub fn parse(arg: &str) -> Option<Self> {
+        match arg.trim() {
+            "bars" => Some(StyleCmd::Set(Style::Bars)),
+            "waves" => Some(StyleCmd::Set(Style::Waves)),
+            "next" | "toggle" => Some(StyleCmd::Next),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LayerKind {
+    Background,
+    Bottom,
+    Top,
+    Overlay,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppMatch {
+    Any,
+    List(Vec<String>),
+}
+
+impl AppMatch {
+    pub fn matches(&self, app_id: Option<&str>) -> bool {
+        match self {
+            AppMatch::Any => true,
+            AppMatch::List(list) => app_id.is_some_and(|a| list.iter().any(|p| p == a)),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AppMatch {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let list: Vec<String> = s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect();
+        if list.iter().any(|p| p == "*") {
+            Ok(AppMatch::Any)
+        } else {
+            Ok(AppMatch::List(list))
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub app_id: String,
+    pub app_id: AppMatch,
     pub fps: u32,
     pub bars_per_channel: u32,
     pub bar_width: f32,
@@ -18,7 +97,7 @@ pub struct Config {
     pub max_over: f32,
     pub max_over_frac: f32,
     pub over_alpha: f32,
-    pub layer: String,
+    pub layer: LayerKind,
     pub glow: f32,
     pub opacity: f32,
     pub follow_ms: f32,
@@ -30,9 +109,9 @@ pub struct Config {
     pub tab_strip_width: f32,
     pub tab_strip_offset: f32,
     pub tab_min: usize,
-    pub style: String,
+    pub style: Style,
     pub wave_colors: Option<Vec<String>>,
-    pub theme: String,
+    pub theme: ThemeSource,
     pub theme_spread: f32,
     pub theme_boost: f32,
     pub wave_line: f32,
@@ -45,7 +124,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            app_id: "kitty".into(),
+            app_id: AppMatch::List(vec!["kitty".into()]),
             fps: 60,
             bars_per_channel: 96,
             bar_width: 5.0,
@@ -57,7 +136,7 @@ impl Default for Config {
             max_over: 56.0,
             max_over_frac: 0.12,
             over_alpha: 0.8,
-            layer: "top".into(),
+            layer: LayerKind::Top,
             glow: 6.0,
             opacity: 0.95,
             follow_ms: 90.0,
@@ -69,9 +148,9 @@ impl Default for Config {
             tab_strip_width: 30.0,
             tab_strip_offset: 12.0,
             tab_min: 2,
-            style: "waves".into(),
+            style: Style::Waves,
             wave_colors: None,
-            theme: "auto".into(),
+            theme: ThemeSource::Auto,
             theme_spread: 40.0,
             theme_boost: 1.25,
             wave_line: 2.5,
@@ -83,62 +162,23 @@ impl Default for Config {
     }
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+static STYLE: Mutex<Option<Style>> = Mutex::new(None);
+
+pub fn style(cfg: &Config) -> Style {
+    STYLE.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or(cfg.style)
 }
 
-fn config_home() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".config"))
-}
-
-pub fn runtime_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("soundwav")
-}
-
-pub static STYLE: AtomicU8 = AtomicU8::new(0);
-
-pub fn wavy(cfg: &Config) -> bool {
-    match STYLE.load(Ordering::Relaxed) {
-        1 => false,
-        2 => true,
-        _ => cfg.style.trim().eq_ignore_ascii_case("waves"),
-    }
-}
-
-pub fn set_style(cfg: &Config, arg: &str) -> Option<String> {
-    let v = match arg.trim() {
-        "bars" => 1,
-        "waves" => 2,
-        "next" | "toggle" => if wavy(cfg) { 1 } else { 2 },
-        _ => return None,
+pub fn set_style(cfg: &Config, cmd: StyleCmd) -> Style {
+    let next = match cmd {
+        StyleCmd::Set(s) => s,
+        StyleCmd::Next => style(cfg).other(),
     };
-    STYLE.store(v, Ordering::Relaxed);
-    Some(if v == 2 { "waves" } else { "bars" }.into())
-}
-
-fn merged(inline: Option<&str>) -> toml::Table {
-    let path = config_home().join("soundwav").join("config.toml");
-    let mut table = match std::fs::read_to_string(&path) {
-        Ok(text) => text.parse::<toml::Table>().unwrap_or_else(|e| {
-            eprintln!("soundwav: {}: {e}, ignoring it", path.display());
-            toml::Table::new()
-        }),
-        Err(_) => toml::Table::new(),
-    };
-    if let Some(s) = inline {
-        match s.parse::<toml::Table>() {
-            Ok(t) => table.extend(t),
-            Err(e) => eprintln!("soundwav: --toml: {e}, ignoring it"),
-        }
-    }
-    table
+    *STYLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
+    next
 }
 
 pub fn load(inline: Option<&str>) -> Config {
-    let mut cfg = toml::Value::Table(merged(inline)).try_into::<Config>().unwrap_or_else(|e| {
-        eprintln!("soundwav: config: {e}, using defaults");
-        Config::default()
-    });
+    let mut cfg: Config = DAEMON.load_config(inline);
     cfg.fps = cfg.fps.clamp(10, 240);
     cfg.bars_per_channel = cfg.bars_per_channel.clamp(8, 256);
     cfg.bar_width = cfg.bar_width.max(1.0);
@@ -192,15 +232,7 @@ pub struct Theme {
 }
 
 pub fn theme_path(cfg: &Config) -> Option<PathBuf> {
-    let t = cfg.theme.trim();
-    match t {
-        "" | "off" | "none" => None,
-        "auto" => Some(config_home().join("soundwav").join("theme.toml")),
-        _ => Some(match t.strip_prefix("~/") {
-            Some(rest) => home().join(rest),
-            None => PathBuf::from(t),
-        }),
-    }
+    DAEMON.theme_file(&cfg.theme)
 }
 
 pub fn read_theme(path: Option<&Path>) -> Result<Theme, String> {
@@ -353,11 +385,54 @@ mod theme_tests {
 
     #[test]
     fn theme_path_modes() {
-        let off = Config { theme: "off".into(), ..Config::default() };
+        let off = Config { theme: ThemeSource::Off, ..Config::default() };
         assert!(theme_path(&off).is_none());
         assert!(theme_path(&Config::default()).unwrap().ends_with("soundwav/theme.toml"));
-        let custom = Config { theme: "/x/y.toml".into(), ..Config::default() };
+        let custom = Config { theme: ThemeSource::File("/x/y.toml".into()), ..Config::default() };
         assert_eq!(theme_path(&custom).unwrap(), PathBuf::from("/x/y.toml"));
         assert!(read_theme(Some(Path::new("/nonexistent/soundwav-theme.toml"))).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod enum_tests {
+    use super::*;
+
+    fn parse(text: &str) -> Config {
+        toml::Value::Table(text.parse().unwrap()).try_into().unwrap()
+    }
+
+    #[test]
+    fn settings_parse_into_enums() {
+        let c = parse("style = \"bars\"\nlayer = \"overlay\"\napp_id = \"kitty, foot\"\ntheme = \"off\"");
+        assert_eq!(c.style, Style::Bars);
+        assert_eq!(c.layer, LayerKind::Overlay);
+        assert_eq!(c.app_id, AppMatch::List(vec!["kitty".into(), "foot".into()]));
+        assert_eq!(c.theme, ThemeSource::Off);
+        assert_eq!(parse("app_id = \"*\"").app_id, AppMatch::Any);
+    }
+
+    #[test]
+    fn bad_style_is_rejected() {
+        let t: Result<Config, _> = toml::Value::Table("style = \"wavez\"".parse().unwrap()).try_into();
+        assert!(t.is_err());
+    }
+
+    #[test]
+    fn app_patterns() {
+        assert!(AppMatch::Any.matches(Some("firefox")));
+        assert!(AppMatch::Any.matches(None));
+        let l = parse("app_id = \"kitty, foot\"").app_id;
+        assert!(l.matches(Some("foot")));
+        assert!(!l.matches(Some("alacritty")));
+        assert!(!l.matches(None));
+    }
+
+    #[test]
+    fn style_commands() {
+        assert_eq!(StyleCmd::parse("next"), Some(StyleCmd::Next));
+        assert_eq!(StyleCmd::parse("toggle"), Some(StyleCmd::Next));
+        assert_eq!(StyleCmd::parse("bars"), Some(StyleCmd::Set(Style::Bars)));
+        assert_eq!(StyleCmd::parse("sparkles"), None);
     }
 }

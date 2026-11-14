@@ -67,7 +67,7 @@ The plugin also adds no-animation layer rules for soundwav's surfaces.
 
 ## Settings
 
-Every setting can go in the `setup { }` table or in `~/.config/soundwav/config.toml`. Values from the plugin win over the file.
+Every setting can go in the `setup { }` table or in `~/.config/soundwav/config.toml`. Values from the plugin win over the file. A bad value (for example `style = "wavez"`) is logged and ignored on its own, and the other settings still apply.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

@@ -951,6 +951,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wgpu",
+ "zoo-ipc",
 ]
 
 [[package]]
@@ -1658,3 +1659,14 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zoo-ipc"
+version = "0.1.0"
+source = "git+https://github.com/Monkellie/zoo-ipc#9d4700116094b014dc22c1def34fcc7f104f0e94"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "toml",
+]

@@ -13,6 +13,12 @@ pub struct Rect {
     pub h: f32,
 }
 
+impl From<zoo_ipc::zoolander::Area> for Rect {
+    fn from(a: zoo_ipc::zoolander::Area) -> Self {
+        Self::new(a.x, a.y, a.width, a.height)
+    }
+}
+
 impl Rect {
     pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
