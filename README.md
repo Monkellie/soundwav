@@ -73,13 +73,16 @@ Every setting can go in the `setup { }` table or in `~/.config/soundwav/config.t
 | --- | --- | --- |
 | `app_id` | `"kitty"` | which windows get the ring: an app id, a comma list, or `"*"` for any focused window |
 | `style` | `"waves"` | `"waves"` or `"bars"` |
-| `wave_colors` | `["#B44CFF", "#FF5FB7", "#5FD4FF"]` | bass, mids, treble |
+| `wave_colors` | `["#B44CFF", "#FF5FB7", "#5FD4FF"]` | bass, mids, treble; setting this turns off theme colours for the waves |
+| `theme` | `"auto"` | theme colour file: `"auto"` is `~/.config/soundwav/theme.toml`, `"off"` disables it, anything else is a path |
+| `theme_spread` | `40.0` | hue distance (degrees) of the bass and treble waves from the theme accent |
+| `theme_boost` | `1.25` | saturation multiplier for theme colours |
 | `wave_line` | `2.5` | crest line width (px) |
 | `wave_fill` | `0.28` | opacity of the fill between the border and the crest |
 | `wave_speed` | `1.0` | wave movement speed multiplier |
 | `wave_step` | `3.0` | sample spacing along the ring (px); lower is smoother and costs more CPU |
 | `corner_blend` | `120.0` | distance (px) over which ring heights blend around corners |
-| `colors` | from cava's `gradient_color_*` | bar colours in `bars` style |
+| `colors` | theme file, else cava's `gradient_color_*` | bar colours in `bars` style |
 | `bars_per_channel` | `96` | spectrum resolution in `bars` style |
 | `bar_width`, `bar_gap` | `5.0`, `3.0` | bar shape in `bars` style |
 | `border` | `5.0` | gap between the window border and the ring (px) |
@@ -98,6 +101,26 @@ Every setting can go in the `setup { }` table or in `~/.config/soundwav/config.t
 | `tab_min`, `tab_strip_width`, `tab_strip_offset` | `2`, `30`, `12` | keeps the ring out of the way of [side-tabs](https://github.com/Monkellie/side-tabs) strips |
 
 Zoolander has only one `gaps_out` value, so `reserve` is how you get a bigger ring on some sides than others. It creates invisible exclusive zones on the overlay layer, and drops them on any monitor that has a fullscreen window.
+
+## Wallpaper colours
+
+soundwav can take its colours from a theme file that something else keeps up to date. It checks the file once a second and fades into new colours without restarting. The file can hold:
+
+```toml
+accent = "#CD95FF"
+wave_colors = ["#7689FF", "#CD95FF", "#FFBEF2"]
+colors = ["#4C278A", "#CD95FF", "#FFFEFF"]
+```
+
+`wave_colors` sets the three waves directly. With only `accent`, soundwav builds them around it: the accent for the mids, and the hue turned `theme_spread` degrees either way for the bass and treble. `colors` is for the `bars` style. Colours you set in `setup { }` or `config.toml` win over the theme file.
+
+### otter-theme-gen
+
+If `install.sh` finds `~/.config/otter-shell/otter-theme-gen.conf`, it installs `otter-theme-gen/soundwav.toml` as a template and registers it, keeping a backup of the config as `otter-theme-gen.conf.bak-soundwav`. otter-theme-gen then rewrites `~/.config/soundwav/theme.toml` whenever the wallpaper changes, so the ring follows the wallpaper.
+
+otter-theme-gen's `direct` strategy takes one colour from the wallpaper (`primary`); its secondary and tertiary roles are fixed status colours. That's why the template passes only the accent. Edit `~/.config/otter-shell/templates/soundwav.toml` to pick other roles.
+
+To undo it, delete the three `template_soundwav_*` lines from `otter-theme-gen.conf`.
 
 ## Command line
 

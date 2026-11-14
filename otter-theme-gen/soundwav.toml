@@ -1,0 +1,2 @@
+accent = "{{color.primary.hex_hash}}"
+colors = ["{{color.primary_container.hex_hash}}", "{{color.primary.hex_hash}}", "{{color.on_surface.hex_hash}}"]

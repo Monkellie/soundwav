@@ -1,5 +1,7 @@
 use crate::cava::{bands, Audio};
-use crate::config::{palette, wave_palette, Config};
+use crate::config::{palette, read_theme, stamp, theme_path, wave_palette, watch_paths, Config};
+use std::path::PathBuf;
+use std::time::SystemTime;
 use crate::layout::{self, Bar, Rect, WaveIn, WaveSample};
 use crate::zoo::Scene;
 use bytemuck::{Pod, Zeroable};
@@ -167,6 +169,11 @@ struct App {
     samples: Vec<WaveSample>,
     verts: Vec<WVert>,
     strips: Vec<(u32, u32)>,
+    watch: Vec<PathBuf>,
+    stamp: Vec<Option<(SystemTime, u64)>>,
+    watch_at: Instant,
+    tcolors: [[f32; 3]; 3],
+    twcolors: [[f32; 3]; 3],
 }
 
 fn to_linear(c: f32) -> f32 {
@@ -549,11 +556,39 @@ impl App {
         }
     }
 
+    fn update_theme(&mut self, now: Instant, dt: f32) {
+        if now.duration_since(self.watch_at) >= Duration::from_secs(1) {
+            self.watch_at = now;
+            let st = stamp(&self.watch);
+            if st != self.stamp {
+                self.stamp = st;
+                match read_theme(theme_path(&self.cfg).as_deref()) {
+                    Ok(theme) => {
+                        let (c, w) = (palette(&self.cfg, &theme), wave_palette(&self.cfg, &theme));
+                        if c != self.tcolors || w != self.twcolors {
+                            self.tcolors = c;
+                            self.twcolors = w;
+                            eprintln!("soundwav: theme colours updated");
+                        }
+                    }
+                    Err(e) => eprintln!("soundwav: theme {e}, keeping colours"),
+                }
+            }
+        }
+        let k = 1.0 - (-dt / 0.6).exp();
+        for (cur, tgt) in self.colors.iter_mut().zip(self.tcolors).chain(self.wcolors.iter_mut().zip(self.twcolors)) {
+            for i in 0..3 {
+                cur[i] += (tgt[i] - cur[i]) * k;
+            }
+        }
+    }
+
     fn tick(&mut self, qh: &QueueHandle<Self>) -> Duration {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.25);
         self.last_tick = now;
         self.update_env(dt);
+        self.update_theme(now, dt);
         let scene = self.scene.lock().unwrap().clone();
         let audio_on = self.audio.lock().unwrap().loud.is_some_and(|t| now.duration_since(t) < Duration::from_millis(1200));
         let follow = 1.0 - (-dt / (self.cfg.follow_ms.max(1.0) / 1000.0)).exp();
@@ -855,8 +890,14 @@ pub fn run(cfg: Config, audio: Arc<Mutex<Audio>>, scene: Arc<Mutex<Option<Scene>
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: Some("soundwav"), ..Default::default() }))
         .map_err(|e| format!("gpu device: {e}"))?;
-    let colors = palette(&cfg);
-    let wcolors = wave_palette(&cfg);
+    let theme = read_theme(theme_path(&cfg).as_deref()).unwrap_or_else(|e| {
+        eprintln!("soundwav: theme {e}, ignoring it");
+        Default::default()
+    });
+    let colors = palette(&cfg, &theme);
+    let wcolors = wave_palette(&cfg, &theme);
+    let watch = watch_paths(&cfg);
+    let first_stamp = stamp(&watch);
     let mut app = App {
         conn: conn.clone(),
         registry: RegistryState::new(&globals),
@@ -882,6 +923,11 @@ pub fn run(cfg: Config, audio: Arc<Mutex<Audio>>, scene: Arc<Mutex<Option<Scene>
         samples: Vec::new(),
         verts: Vec::new(),
         strips: Vec::new(),
+        watch,
+        stamp: first_stamp,
+        watch_at: Instant::now(),
+        tcolors: colors,
+        twcolors: wcolors,
     };
     let mut event_loop: EventLoop<App> = EventLoop::try_new().map_err(|e| format!("event loop: {e}"))?;
     WaylandSource::new(conn, event_queue).insert(event_loop.handle()).map_err(|e| format!("wayland source: {e}"))?;

@@ -155,7 +155,7 @@ where
             drop(c);
             if exit {
                 let _ = std::fs::remove_file(&path);
-                std::process::exit(0);
+                unsafe { libc::_exit(0) };
             }
         }
     });
